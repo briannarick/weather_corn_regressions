@@ -1,15 +1,17 @@
 ---
 title: "Weather and Corn Yield Regressions"
-author: "Nathan Mueller"
-date: "2/25/2022"
+author: "Bri Rick"
+date: "3/3/2022"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
 library(tidyverse)
 library(R.matlab)
 library(rnassqs)
+library(dplyr)
 ```
 
 ## Weather Data Analysis
@@ -80,7 +82,7 @@ summary(lm_summertmax)
 ```{r winter temps}
 
 winnewinter <- tmaxdf %>%
-  filter(countyfp==191 & doy <= 59 | doy >= 335 & !is.na(tmax)) %>%
+  filter(countyfp==191 & (doy <= 59 | doy >= 335) & !is.na(tmax)) %>%
   group_by(year) %>%
   summarize(meantmax = mean(tmax))
 
@@ -118,7 +120,7 @@ ggplot(winnewinter) +
 ```{r yield download}
 
 # set our API key with NASS
-nassqs_auth(key = "...")
+nassqs_auth(key = "F7506B86-1C9E-39F3-AA20-719CAD3B47A3")
 
 # parameters to query on 
 params <- list(commodity_desc = "CORN", util_practice_desc = "GRAIN", prodn_practice_desc = "ALL PRODUCTION PRACTICES", year__GE = 1981, state_alpha = "IA")
@@ -140,16 +142,194 @@ cornyields <- tibble(cornyields)
 
 ### Question 1a: Extract Winneshiek County corn yields, fit a linear time trend, make a plot. Is there a significant time trend?
 
+*Yes, there is a significant increase in corn yield over time for Winneshiek County, with an increase of about 2.46 per year. *
+
+```{r}
+cornWinn <- cornyields %>% filter(county_name == "WINNESHIEK")
+
+lm_cornWinn <- lm(yield ~ year, cornWinn)
+cornWinn$fitted <- lm_cornWinn$fitted.values
+summary(lm_cornWinn)
+
+ggplot(cornWinn) +
+  geom_point(aes(x = year, y = yield)) +
+  geom_line(aes(x = year, y = fitted)) +
+  theme_bw()
+```
+
+
 ### Question 1b: Fit a quadratic time trend (i.e., year + year^2) and make a plot. Is there evidence for slowing yield growth? 
+
+*There does not appear to be evidence for a slowing in yield growth in Winnesheik County in Iowa*
+
+```{r}
+cornWinn$yearsq <- cornWinn$year^2
+
+lm_cornWinnquad <- lm(yield ~ year + yearsq, cornWinn)
+summary(lm_cornWinnquad)
+cornWinn$fittedsq <- lm_cornWinnquad$fitted.values
+
+ggplot(cornWinn) +
+  geom_point(aes(x = year, y = yield)) +
+  geom_line(aes(x = year, y = fittedsq)) +
+  theme_bw()
+```
+
 
 ### Question 2 -- Time Series: Let's analyze the relationship between temperature and yields for the Winneshiek County time series. Use data on yield and summer avg Tmax. Is adding year or Tmax^2 to your model helpful? Make a plot and interpret the results.
 
+*Adding tmax^2 to the model is helpful and gives a better fit for the model.*
+
+```{r}
+tmaxyield <- cornWinn %>% inner_join(winnesummer, by = "year")
+tmaxyield$tsq <- tmaxyield$meantmax^2
+
+lm_tmaxyield <- lm(yield ~ meantmax, tmaxyield)
+summary(lm_tmaxyield)
+tmaxyield$fitmeantmax <- lm_tmaxyield$fitted.values
+
+lm_tmaxyieldyear <- lm(yield ~ meantmax + year, tmaxyield)
+summary(lm_tmaxyieldyear)
+tmaxyield$fitmeantmaxyear <- lm_tmaxyieldyear$fitted.values
+
+lm_tmaxyieldsq <- lm(yield ~ meantmax + tsq, tmaxyield)
+summary(lm_tmaxyieldsq)
+tmaxyield$fitmeantmaxyield <- lm_tmaxyieldsq$fitted.values
+
+ggplot(tmaxyield) +
+  geom_point(aes(y = yield, x = meantmax)) +
+  geom_line(aes(x = meantmax, y = fitmeantmax))+
+  theme_bw()
+  
+ggplot(tmaxyield) +
+  geom_point(aes(y = yield, x = meantmax)) +
+  geom_line(aes(x = meantmax, y = fitmeantmaxyear))+
+  theme_bw()
+  
+ggplot(tmaxyield) +
+  geom_point(aes(y = yield, x = meantmax)) +
+  geom_line(aes(x = meantmax, y = fitmeantmaxyield))+
+  theme_bw()
+```
+
+
 ### Question 3 -- Cross-Section: Analyze the relationship between temperature and yield across all counties in 2018. Is there a relationship? Interpret the results.
+
+*There is an increase in yield with temperature until about 15 degrees C, then there is a decrease in yield with an increase in temperature. A simple linear model does not fit this trend well, however, a quadradic model incorporating mean T max and mean T max squared fits well.*
+
+```{r}
+cornyields18 <- cornyields %>% filter(year == 2018) %>% 
+  group_by(county_name)
+
+tmax_county <- tmaxdf %>% group_by(countyfp) %>% 
+  filter(year == 2018) %>% 
+  filter(doy >- 152 & doy <= 243) %>% 
+  summarize(meantmax = mean(tmax)) %>% 
+  rename(county_ansi = "countyfp") 
+
+tmax_county$county_ansi <- as.numeric(as.character(tmax_county$county_ansi))
+
+yield_county <- left_join(cornyields18, tmax_county, by = "county_ansi")
+yield_county$tsq <- yield_county$meantmax^2
+
+lm_counties <- lm(yield ~ meantmax, yield_county)
+summary(lm_counties)
+yield_county$fitted <- lm_counties$fitted.values
+
+lm_countiessq <- lm(yield ~ meantmax + tsq, yield_county)
+summary(lm_tmaxyieldsq)
+yield_county$fitmeantmaxyield <- lm_countiessq$fitted.values
+
+ggplot(yield_county) +
+  geom_point(aes(x=meantmax, y = yield)) +
+  geom_line(aes(x = meantmax, y = fitted)) +
+  geom_line(aes(x = meantmax, y = fitmeantmaxyield)) +
+  xlab("Mean T max")+
+  ylab("Corn yield")+
+  theme_bw()
+
+```
+
 
 ### Question 4 -- Panel: One way to leverage multiple time series is to group all data into what is called a "panel" regression. Convert the county ID code ("countyfp" or "county_ansi") into factor using as.factor, then include this variable in a regression using all counties' yield and summer temperature data. How does the significance of your temperature coefficients (Tmax, Tmax^2) change? Make a plot comparing actual and fitted yields and interpret the results of your model.
 
+*The fitted yield tends to be higher than the actual yield for corn in Iowa.*
+
+```{r}
+cornyieldsall <- cornyields %>% group_by(county_ansi) 
+
+tmaxcountyall <- tmaxdf %>%  group_by(countyfp) %>% 
+  filter(doy >- 152 & doy <= 243) %>% 
+  summarize(meantmax = mean(tmax)) %>% 
+  rename(county_ansi = "countyfp")
+
+tmaxcountyall$county_ansi <- as.numeric(as.character(tmaxcountyall$county_ansi))
+
+panel <- left_join(cornyieldsall, tmaxcountyall, by = "county_ansi")
+  
+panel$county_ansi <- as.factor(panel$county_ansi)
+panel$tsq <- panel$meantmax^2
+
+lm_yield_county_combo <- lm(yield ~ meantmax + tsq + county_ansi + year, panel)
+summary(lm_yield_county_combo)
+panel$fitted <- lm_yield_county_combo$fitted.values
+
+ggplot(panel)+
+  geom_point(aes(x = yield, y = fitted)) +
+  geom_smooth(aes(x = yield, y = fitted), method = lm) +
+  xlab("Actual Yield")+
+  ylab("Fitted Yield")+
+  theme_bw()
+```
+
+
 ### Question 5 -- Soybeans: Download NASS data on soybean yields and explore either a time series relationship for a given county, the cross-sectional relationship for a given year, or a panel across all counties and years.
 
-### Bonus: Find a package to make a county map of Iowa displaying some sort of information about yields or weather. Interpret your map.
+*For soybeans, the fitted values for yields less than about 40 overestimate the acutal yields, whereas values greater than 40 tend to underestimate the acutal yield values.*
 
-### Bonus #2: Challenge question - map trends in corn yields by county across Iowa. Interpret your map.
+```{r}
+# set our API key with NASS
+nassqs_auth(key = "F7506B86-1C9E-39F3-AA20-719CAD3B47A3")
+
+# parameters to query on 
+paramssoy <- list(commodity_desc = "SOYBEANS", statisticcat_desc="YIELD", prodn_practice_desc = "ALL PRODUCTION PRACTICES", year__GE = 1981, state_alpha = "IA")
+
+# download
+soyyieldsall <- nassqs_yields(paramssoy)
+
+soyyieldsall$county_ansi <- as.numeric(soyyieldsall$county_ansi)
+soyyieldsall$yield <- as.numeric(soyyieldsall$Value)
+
+# clean and filter this dataset
+soyyields <- select(soyyieldsall, county_ansi, county_name, yield, year) %>%
+  filter(!is.na(county_ansi) & !is.na(yield))
+soyyields <- tibble(soyyields)
+
+soyyields <- soyyieldsall %>% group_by(county_code) %>% 
+  unique() %>% 
+  filter(!is.na(county_ansi))
+
+tmaxcountyall <- tmaxdf %>%  group_by(countyfp) %>% 
+  filter(doy >- 152 & doy <= 243) %>% 
+  summarize(meantmax = mean(tmax)) %>% 
+  rename(county_ansi = "countyfp")
+
+tmaxcountyall$county_ansi <- as.numeric(as.character(tmaxcountyall$county_ansi))
+
+panelsoy <- left_join(soyyields, tmaxcountyall, by = "county_ansi")
+  
+panelsoy$county_ansi <- as.factor(panelsoy$county_ansi)
+panelsoy$tsq <- panelsoy$meantmax^2
+
+lm_yield_county_combo <- lm(yield ~ meantmax + tsq + county_ansi + year, panelsoy)
+summary(lm_yield_county_combo)
+panelsoy$fitted <- lm_yield_county_combo$fitted.values
+
+ggplot(panelsoy)+
+  geom_point(aes(x = yield, y = fitted)) +
+  geom_smooth(aes(x = yield, y = fitted), method = lm) +
+  xlab("Actual Yield")+
+  ylab("Fitted Yield")+
+  theme_bw()
+```
+
